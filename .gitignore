@@ -1,0 +1,10 @@
+.wwebjs_auth/
+.wwebjs_cache/
+node_modules/
+# Ignora o Chromium baixado automaticamente
+node_modules/puppeteer/.local-chromium/
+node_modules/puppeteer-core/.local-chromium/
+
+node_modules/puppeteer/.local-chromium/
+node_modules/puppeteer/.local-chromium/
+node_modules/puppeteer-core/.local-chromium/
