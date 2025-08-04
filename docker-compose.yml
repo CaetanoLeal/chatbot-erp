@@ -1,0 +1,13 @@
+version: '3.8'
+
+services:
+  chatbot:
+    build:
+      context: .
+      dockerfile: dockerfile
+    container_name: chatbot-erp
+    volumes:
+      - .:/usr/src/app
+    ports:
+      - "3000:3000" 
+    tty: true
