@@ -3,66 +3,113 @@ const qrcode = require("qrcode-terminal");
 const cors = require("cors");
 const { Client, LocalAuth } = require("whatsapp-web.js");
 const { body, validationResult } = require("express-validator");
+const { v4: uuidv4 } = require("uuid");
 
 const app = express();
 const PORT = 3000;
 
 app.use(cors());
-app.use(express.json()); // Necessário para receber JSON em POST
+app.use(express.json());
 
-let qrCodeString = null;
-const receivedMessages = []; // Armazena mensagens recebidas em memória
+const sessions = {}; // token -> client
+const qrCodes = {}; // token -> qr
+const instanceInfo = {}; // token -> { nome }
+const receivedMessages = [];
 
-// Inicializa o cliente do WhatsApp
-const client = new Client({
-  authStrategy: new LocalAuth(),
-  puppeteer: {
-    args: ["--no-sandbox", "--disable-setuid-sandbox"],
-  },
-});
+// Criar nova instância
+app.post(
+  "/nova-instancia",
+  [body("Nome").notEmpty().withMessage("Nome é obrigatório")],
+  async (req, res) => {
+    const errors = validationResult(req);
+    if (!errors.isEmpty()) {
+      return res.status(422).json({ status: false, message: errors.mapped() });
+    }
 
-// Exibe o QR Code no terminal
-client.on("qr", (qr) => {
-  qrCodeString = qr;
-  console.log("🔐 QR Code string:", qr);
-  qrcode.generate(qr, { small: true });
-});
+    const nomeDaInstancia = req.body.Nome;
+    const token = uuidv4();
 
-// Conexão bem-sucedida
-client.on("ready", () => {
-  console.log("✅ WhatsApp está conectado!");
-});
+    const client = new Client({
+      authStrategy: new LocalAuth({ clientId: token }),
+      puppeteer: {
+        headless: true,
+        args: ["--no-sandbox", "--disable-setuid-sandbox"],
+      },
+    });
 
-// Escuta mensagens recebidas
-client.on("message", async (msg) => {
-  const remetente = msg.from;
-  const conteudo = msg.body;
-  const timestamp = new Date().toISOString();
-  const numeroLimpo = remetente.replace("@c.us", "");
+    sessions[token] = client;
+    instanceInfo[token] = { nome: nomeDaInstancia };
 
-  console.log("📩 Nova mensagem recebida:");
-  console.log("Número:", numeroLimpo);
-  console.log("Mensagem:", conteudo);
+    let qrCodeTimeout;
 
-  receivedMessages.push({
-    numero: numeroLimpo,
-    mensagem: conteudo,
-    dataHora: timestamp,
-  });
+    client.on("qr", (qr) => {
+      if (qrCodes[token]) return;
+      qrCodes[token] = qr;
+      console.log(`[${nomeDaInstancia}] 🔐 QR Code gerado`);
+      qrcode.generate(qr, { small: true });
 
-  // (Opcional) Responder automaticamente
-  // await msg.reply("Mensagem recebida!");
-});
+      qrCodeTimeout = setTimeout(() => {
+        if (!client.info) {
+          console.log(`[${nomeDaInstancia}] ❌ QR expirado. Encerrando sessão.`);
+          client.destroy();
+          delete sessions[token];
+          delete qrCodes[token];
+          delete instanceInfo[token];
+        }
+      }, 60 * 1000);
+    });
 
-// Inicia o cliente
-client.initialize();
+    client.on("ready", () => {
+      console.log(`[${nomeDaInstancia}] ✅ Cliente conectado! Token: ${token}`);
+      clearTimeout(qrCodeTimeout);
+      delete qrCodes[token];
+    });
+
+    client.on("authenticated", () => {
+      console.log(`[${nomeDaInstancia}] 🔐 Autenticado`);
+    });
+
+    client.on("disconnected", (reason) => {
+      console.log(`[${nomeDaInstancia}] 🔌 Desconectado: ${reason}`);
+      delete sessions[token];
+      delete qrCodes[token];
+      delete instanceInfo[token];
+    });
+
+    client.on("message", async (msg) => {
+      const remetente = msg.from;
+      const conteudo = msg.body;
+      const timestamp = new Date().toISOString();
+      const numeroLimpo = remetente.replace("@c.us", "");
+
+      console.log(`[${nomeDaInstancia}] 📩 Mensagem de ${numeroLimpo}: ${conteudo}`);
+
+      receivedMessages.push({
+        token,
+        numero: numeroLimpo,
+        mensagem: conteudo,
+        dataHora: timestamp,
+      });
+    });
+
+    await client.initialize();
+
+    res.json({
+      status: true,
+      token,
+      nome: nomeDaInstancia,
+      message: "Sessão iniciada. QR gerado.",
+    });
+  }
+);
 
 // Rota para obter o QR code
-app.get("/qrcode", (req, res) => {
-  if (qrCodeString) {
-    res.json({ qr: qrCodeString });
+app.get("/qrcode/:token", (req, res) => {
+  const token = req.params.token;
+  if (qrCodes[token]) {
+    res.json({ status: true, qr: qrCodes[token] });
   } else {
-    res.status(404).json({ error: "QR Code ainda não gerado ou já expirou" });
+    res.status(404).json({ status: false, message: "QR Code não disponível ou expirado." });
   }
 });
 
@@ -70,48 +117,42 @@ app.get("/qrcode", (req, res) => {
 app.post(
   "/send-message",
   [
+    body("token").notEmpty().withMessage("Token é obrigatório"),
     body("number").notEmpty().withMessage("Número é obrigatório"),
     body("message").notEmpty().withMessage("Mensagem é obrigatória"),
   ],
   async (req, res) => {
     const errors = validationResult(req);
     if (!errors.isEmpty()) {
-      return res.status(422).json({
-        status: false,
-        message: errors.mapped(),
-      });
+      return res.status(422).json({ status: false, message: errors.mapped() });
     }
 
-    const { number, message } = req.body;
+    const { token, number, message } = req.body;
+    const client = sessions[token];
+
+    if (!client) {
+      return res.status(400).json({ status: false, message: "Sessão não encontrada ou inativa." });
+    }
 
     const numberDDD = number.substr(2, 2);
     const numberUser = number.slice(-8);
-    let numberZDG = "";
-
-    if (parseInt(numberDDD) <= 30) {
-      numberZDG = `55${numberDDD}9${numberUser}@c.us`;
-    } else {
-      numberZDG = `55${numberDDD}${numberUser}@c.us`;
-    }
+    const numberZDG =
+      parseInt(numberDDD) <= 30
+        ? `55${numberDDD}9${numberUser}@c.us`
+        : `55${numberDDD}${numberUser}@c.us`;
 
     try {
       const response = await client.sendMessage(numberZDG, message);
-      res.status(200).json({
-        status: true,
-        message: "BOT-ZDG Mensagem enviada",
-        response,
-      });
+      res.status(200).json({ status: true, message: "Mensagem enviada com sucesso", response });
     } catch (err) {
-      res.status(500).json({
-        status: false,
-        message: "BOT-ZDG Mensagem não enviada",
-        response: err.message,
-      });
+      res
+        .status(500)
+        .json({ status: false, message: "Erro ao enviar mensagem", response: err.message });
     }
   }
 );
 
-// Rota para listar mensagens recebidas
+// Listar mensagens recebidas
 app.get("/received-messages", (req, res) => {
   res.json({
     status: true,
@@ -120,7 +161,16 @@ app.get("/received-messages", (req, res) => {
   });
 });
 
-// Inicia o servidor
+// Rota para listar instâncias conectadas
+app.get("/instancias", (req, res) => {
+  const conectadas = Object.keys(sessions).map((token) => ({
+    token,
+    nome: instanceInfo[token]?.nome || "Desconhecido",
+  }));
+
+  res.json({ status: true, total: conectadas.length, instancias: conectadas });
+});
+
 app.listen(PORT, "0.0.0.0", () => {
   console.log(`🚀 Servidor rodando em http://localhost:${PORT}`);
 });
