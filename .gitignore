@@ -8,3 +8,9 @@ node_modules/puppeteer-core/.local-chromium/
 node_modules/puppeteer/.local-chromium/
 node_modules/puppeteer/.local-chromium/
 node_modules/puppeteer-core/.local-chromium/
+audio/
+image/
+video/
+media/
+E/
+R/
