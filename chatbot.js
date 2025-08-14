@@ -151,160 +151,184 @@ app.post(
         }
       });
 
-      // Recebimento de mensagens
-      // client.on("message", async (msg) => {
-      //   try {
-      //     if (msg.hasMedia) {
-      //       const media = await msg.downloadMedia();
-      //       let fileExt = media.mimetype.split("/")[1];
-      //       let tipo = media.mimetype.split("/")[0];
-
-      //       const filename = tipo + '_' + Date.now() + '.' + fileExt;
-      //       console.log(`[${instanceInfo[token].nome}] 📎 Mensagem de mídia recebida: ${filename}`);
-
-      //       // Cria a pasta se não existir
-      //       const dirPath = path.join(__dirname, tipo);
-      //       if (!fs.existsSync(dirPath)) {
-      //         fs.mkdirSync(dirPath, { recursive: true });
-      //       }
-
-      //       // Salva o arquivo
-      //       const filePath = path.join(dirPath, filename);
-      //       fs.writeFileSync(filePath, media.data, media.mimetype.startsWith("image") || media.mimetype.startsWith("audio") ? "base64" : undefined);
-
-      //       sendWebhook(instanceInfo[token].webhook, {
-      //         evento: "mensagem_de_midia_recebida",
-      //         nome: instanceInfo[token].nome,
-      //         messages: {
-      //           remetente: msg.from.replace("@c.us", ""),
-      //           mensagem: "[Mídia recebida]",
-      //           dataHora: new Date().toISOString(),
-      //           destinatario: instanceInfo[token].numero,
-      //           tipo: tipo,
-      //           filename: filename},
-      //       });
-      //       return;
-      //     }
-      //     const remetente = msg.from;
-      //     const conteudo = msg.body;
-      //     const timestamp = new Date().toISOString();
-      //     const numeroLimpo = remetente.replace("@c.us", "");
-      //     const destinatario = instanceInfo[token].numero;
-
-      //     messages.push({
-      //       token,
-      //       remetente: numeroLimpo,
-      //       mensagem: conteudo,
-      //       dataHora: timestamp,
-      //       destinatario: destinatario,
-      //     });
-      //     console.log(`[${instanceInfo[token].nome}] 📩 Mensagem de ${numeroLimpo}: ${conteudo}`);
-      //     sendWebhook(instanceInfo[token].webhook, {
-      //       evento: "mensagem_recebida",
-      //       nome: instanceInfo[token].nome,
-      //       messages: {
-      //         remetente: numeroLimpo,
-      //         mensagem: conteudo,
-      //         dataHora: timestamp,
-      //         destinatario: destinatario,
-      //       },
-      //     });
-      //   } catch (err) {
-      //     console.error("Erro no evento message:", err);
-      //   }
-      // });
+      const mensagensMonitoradas = new Set();
 
       // Mensagens enviadas
       client.on("message_create", async (msg) => {
+        mensagensMonitoradas.add(msg.id._serialized);
         let v_no_remetente;
         let v_no_destinatario;
         let v_ds_mensagem;
         let v_dh_mensagem;
         let v_sg_tipo; // E - Enviada, R - Recebida
+        let v_is_respondida = msg.hasQuotedMsg ? "t" : "f";
+        let v_is_encaminhada = msg.isForwarded ? "t" : "f";
+        let v_mensagem_respondida = null;
+
+        if (msg.hasQuotedMsg) {
+        try {
+            const quotedMsg = await msg.getQuotedMessage();
+            v_mensagem_respondida = quotedMsg.body;
+        } catch (e) {
+            v_mensagem_respondida = null;
+        }
+    }
 
         try {
-          // Verifica remetente e destinatário
-          if (msg.fromMe) {
-            // Mensagens enviadas por mim
-            v_sg_tipo = "E";
-            v_no_remetente = instanceInfo[token].numero;
-            v_no_destinatario = msg.to;
-          } else {
-            // Mensagens recebidas
-            v_sg_tipo = "R";
-            v_no_remetente = msg.from;
-            v_no_destinatario = instanceInfo[token].numero;
-          }
-          v_ds_mensagem = msg.body;
-          v_dh_mensagem = new Date().toISOString();
+            if (msg.fromMe) {
+                v_sg_tipo = "E";
+                v_no_remetente = instanceInfo[token].numero;
+                v_no_destinatario = msg.to;
+            } else {
+                v_sg_tipo = "R";
+                v_no_remetente = msg.from;
+                v_no_destinatario = instanceInfo[token].numero;
+            }
+            v_ds_mensagem = msg.body;
+            v_dh_mensagem = new Date().toISOString();
 
-          // Processamento de mensagens
-          messages.push({
-            token,
-            remetente: v_no_remetente,
-            destinatario: v_no_destinatario,
-            mensagem: v_ds_mensagem,
-            dataHora: v_dh_mensagem,
-          });
-          
-          // webhook e log
-          console.log(`[${v_no_remetente}] Mensagem enviada para ${v_no_destinatario}: ${v_ds_mensagem}`);
-          sendWebhook(instanceInfo[token].webhook, {
-            evento: (v_sg_tipo = "E") ? "Envio de Mensagem" : "Recebimento de Mensagem",
-            nome: instanceInfo[token].nome,
-            messages: {
-              tipo: v_sg_tipo,
-              remetente: v_no_remetente,
-              destinatario: v_no_destinatario,
-              mensagem: v_ds_mensagem,
-              dataHora: v_dh_mensagem,
-            },
-          });
-
-          // Se for mídia, baixar e salvar
-          if (msg.hasMedia) {
-            console.log(`hasMedia`);
-            // Informações do arquivo
-            const media = await msg.downloadMedia();
-            let v_no_tipo = media.mimetype.split("/")[0];
-            let v_no_extensao = media.mimetype.split("/")[1];
-            const v_no_arquivo = v_no_tipo + '_' + Date.now() + '.' + v_no_extensao;
-            console.log(`${v_no_tipo} + ${v_no_extensao} + ${v_no_arquivo}`);
-
-            console.log(`[${instanceInfo[token].nome}] 📎 Mensagem de mídia recebida: ${v_no_arquivo}`);
-
-            // Cria a pasta incluindo o tipo e o subdiretório E/R
-              const pastaDestino = path.join(__dirname, v_no_tipo, v_sg_tipo);
-              
-              if (!fs.existsSync(pastaDestino)) {
-                fs.mkdirSync(pastaDestino, { recursive: true });
-              }
-
-              // Caminho final do arquivo
-              const v_no_path_arquivo = path.join(pastaDestino, v_no_arquivo);
-
-              // Salva o arquivo
-              fs.writeFileSync(
-                v_no_path_arquivo,
-                media.data,
-                media.mimetype.startsWith("image") || media.mimetype.startsWith("audio") ? "base64" : undefined
-              );
-            sendWebhook(instanceInfo[token].webhook, {
-              evento: "Mensagem de Mídia",
-              nome: instanceInfo[token].nome,
-              messages: {
+            messages.push({
+                token,
                 remetente: v_no_remetente,
                 destinatario: v_no_destinatario,
-                mensagem: "Conteúdo de mídia",
+                mensagem: v_ds_mensagem,
                 dataHora: v_dh_mensagem,
-                tipo: tipo,
-                mídia: v_no_path_arquivo
-              },
+                respondida: v_is_respondida,
+                encaminhada: v_is_encaminhada,
+                mensagem_respondida: v_mensagem_respondida,
             });
-            return;
-          }
+
+            let logMsg = `[${v_no_remetente}] Mensagem enviada para ${v_no_destinatario}: ${v_ds_mensagem}`;
+            if (v_is_respondida === "t" && v_mensagem_respondida) {
+                logMsg += ` (responde à mensagem: "${v_mensagem_respondida}")`;
+            }
+            if (v_is_encaminhada === "t") {
+                logMsg += " [Mensagem encaminhada]";
+            }
+            console.log(logMsg);
+
+            sendWebhook(instanceInfo[token].webhook, {
+                evento: (v_sg_tipo === "E") ? "Envio de Mensagem" : "Recebimento de Mensagem",
+                nome: instanceInfo[token].nome,
+                messages: {
+                    tipo: v_sg_tipo,
+                    remetente: v_no_remetente,
+                    destinatario: v_no_destinatario,
+                    mensagem: v_ds_mensagem,
+                    dataHora: v_dh_mensagem,
+                    respondida: v_is_respondida,
+                    encaminhada: v_is_encaminhada,
+                    mensagem_respondida: v_mensagem_respondida,
+                },
+            });
+
+            // Se for mídia, baixar e salvar
+            if (msg.hasMedia) {
+                const media = await msg.downloadMedia();
+                let v_no_tipo = media.mimetype.split("/")[0];
+                let v_no_extensao = media.mimetype.split("/")[1];
+                v_no_extensao = v_no_extensao.includes(";") ? v_no_extensao.split(";")[0] : v_no_extensao;
+                const v_no_arquivo = v_no_tipo + '_' + Date.now() + '.' + v_no_extensao;
+
+                const acao = v_sg_tipo === "E" ? "enviada" : "recebida";
+                console.log(`[${instanceInfo[token].nome}] 📎 Mensagem de mídia ${acao}: ${v_no_arquivo}`);
+
+                const pastaDestino = path.join(__dirname, v_sg_tipo, v_no_tipo);
+                if (!fs.existsSync(pastaDestino)) {
+                    fs.mkdirSync(pastaDestino, { recursive: true });
+                }
+
+                const v_no_path_arquivo = path.join(pastaDestino, v_no_arquivo);
+
+                if (media.mimetype.startsWith("image") || media.mimetype.startsWith("audio") || media.mimetype.startsWith("video")) {
+                    fs.writeFileSync(v_no_path_arquivo, media.data, "base64");
+                } else {
+                    fs.writeFileSync(v_no_path_arquivo, Buffer.from(media.data, "base64"));
+                }
+
+                sendWebhook(instanceInfo[token].webhook, {
+                    evento: "Mensagem de Mídia",
+                    nome: instanceInfo[token].nome,
+                    messages: {
+                        remetente: v_no_remetente,
+                        destinatario: v_no_destinatario,
+                        mensagem: "Conteúdo de mídia",
+                        dataHora: v_dh_mensagem,
+                        tipo: v_no_tipo,
+                        mídia: v_no_path_arquivo
+                    },
+                });
+                return;
+            }
         } catch (err) {
-          console.error("Erro no evento message_create:", err);
+            console.error("Erro no evento message_create:", err);
+        }
+    });
+
+    // Captura reações somente em mensagens criadas nesta sessão
+    client.on("message_reaction", async (reaction) => {
+        try {
+            if (!mensagensMonitoradas.has(reaction.msgId._serialized)) {
+                return; // Ignora reações a mensagens antigas
+            }
+
+            const remetente = reaction.senderId;
+            const emoji = reaction.emoji;
+            let v_conteudo_mensagem = null;
+
+            try {
+                const mensagemReagida = await client.getMessageById(reaction.msgId._serialized);
+                v_conteudo_mensagem = mensagemReagida?.body || "[Mídia ou mensagem sem texto]";
+            } catch (e) {
+                v_conteudo_mensagem = "[Não foi possível obter o conteúdo]";
+            }
+
+            console.log(
+                `[${instanceInfo[token]?.nome || "Instância"}] Reação recebida: ${emoji} de ${remetente} na mensagem: "${v_conteudo_mensagem}"`
+            );
+
+            sendWebhook(instanceInfo[token]?.webhook, {
+                evento: "Reacao em Mensagem",
+                nome: instanceInfo[token]?.nome,
+                reacao: {
+                    remetente,
+                    emoji,
+                    conteudo_mensagem_reagida: v_conteudo_mensagem,
+                },
+            });
+        } catch (err) {
+            console.error("Erro ao processar reação:", err);
+        }
+    });
+
+      client.on("message_reaction", async (reaction) => {
+        try {
+          const remetente = reaction.senderId;
+          const emoji = reaction.emoji;
+          // Buscar o conteúdo da mensagem reagida
+          let v_conteudo_mensagem = null;
+          try {
+            const mensagemReagida = await client.getMessageById(reaction.msgId._serialized || reaction.msgId.id || reaction.msgId);
+            v_conteudo_mensagem = mensagemReagida?.body || "[Mídia ou mensagem sem texto]";
+          } catch (e) {
+            v_conteudo_mensagem = "[Não foi possível obter o conteúdo]";
+          }
+
+          console.log(
+            `[${instanceInfo[token]?.nome || "Instância"}] Reação recebida: ${emoji} de ${remetente} na mensagem: "${v_conteudo_mensagem}"`
+          );
+
+          sendWebhook(instanceInfo[token]?.webhook, {
+            evento: "Reacao em Mensagem",
+            nome: instanceInfo[token]?.nome,
+            reacao: {
+              remetente,
+              emoji,
+              conteudo_mensagem_reagida: v_conteudo_mensagem,
+            },
+          });
+        } catch (err) {
+          console.error("Erro ao processar reação:", err);
         }
       });
 
