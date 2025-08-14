@@ -1,3 +1,62 @@
-[] ler as mensagens
-[] enviar o alerta
-[] responder
+      // Recebimento de mensagens
+      // client.on("message", async (msg) => {
+      //   try {
+      //     if (msg.hasMedia) {
+      //       const media = await msg.downloadMedia();
+      //       let fileExt = media.mimetype.split("/")[1];
+      //       let tipo = media.mimetype.split("/")[0];
+
+      //       const filename = tipo + '_' + Date.now() + '.' + fileExt;
+      //       console.log(`[${instanceInfo[token].nome}] 📎 Mensagem de mídia recebida: ${filename}`);
+
+      //       // Cria a pasta se não existir
+      //       const dirPath = path.join(__dirname, tipo);
+      //       if (!fs.existsSync(dirPath)) {
+      //         fs.mkdirSync(dirPath, { recursive: true });
+      //       }
+
+      //       // Salva o arquivo
+      //       const filePath = path.join(dirPath, filename);
+      //       fs.writeFileSync(filePath, media.data, media.mimetype.startsWith("image") || media.mimetype.startsWith("audio") ? "base64" : undefined);
+
+      //       sendWebhook(instanceInfo[token].webhook, {
+      //         evento: "mensagem_de_midia_recebida",
+      //         nome: instanceInfo[token].nome,
+      //         messages: {
+      //           remetente: msg.from.replace("@c.us", ""),
+      //           mensagem: "[Mídia recebida]",
+      //           dataHora: new Date().toISOString(),
+      //           destinatario: instanceInfo[token].numero,
+      //           tipo: tipo,
+      //           filename: filename},
+      //       });
+      //       return;
+      //     }
+      //     const remetente = msg.from;
+      //     const conteudo = msg.body;
+      //     const timestamp = new Date().toISOString();
+      //     const numeroLimpo = remetente.replace("@c.us", "");
+      //     const destinatario = instanceInfo[token].numero;
+
+      //     messages.push({
+      //       token,
+      //       remetente: numeroLimpo,
+      //       mensagem: conteudo,
+      //       dataHora: timestamp,
+      //       destinatario: destinatario,
+      //     });
+      //     console.log(`[${instanceInfo[token].nome}] 📩 Mensagem de ${numeroLimpo}: ${conteudo}`);
+      //     sendWebhook(instanceInfo[token].webhook, {
+      //       evento: "mensagem_recebida",
+      //       nome: instanceInfo[token].nome,
+      //       messages: {
+      //         remetente: numeroLimpo,
+      //         mensagem: conteudo,
+      //         dataHora: timestamp,
+      //         destinatario: destinatario,
+      //       },
+      //     });
+      //   } catch (err) {
+      //     console.error("Erro no evento message:", err);
+      //   }
+      // });
