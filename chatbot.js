@@ -28,12 +28,130 @@ process.on("unhandledRejection", (reason) => {
   console.error("❌ Promessa rejeitada sem tratamento:", reason);
 });
 
+
+
 // Função para enviar dados ao WebHook
+// Função para enviar dados ao WebHook - AJUSTADA para a API PHP
+// Função para enviar dados ao WebHook - Versão com campos específicos
+// Função para enviar dados ao WebHook - CORRIGIDA para a API PHP
 async function sendWebhook(url, payload) {
   try {
-    await axios.post(url, payload);
+    // Extrai a mensagem textual do payload
+    let mensagemTexto = '';
+    
+    // Tenta encontrar a mensagem em diferentes estruturas
+    if (payload.mensagem_completa && payload.mensagem_completa.body) {
+      mensagemTexto = payload.mensagem_completa.body;
+    } else if (payload.body) {
+      mensagemTexto = payload.body;
+    } else if (payload.mensagem) {
+      mensagemTexto = payload.mensagem;
+    } else if (payload.messages && payload.messages.mensagem) {
+      mensagemTexto = payload.messages.mensagem;
+    }
+    
+    // Converte o payload completo para string JSON
+    const jsonCompleto = JSON.stringify(payload);
+    
+    // Estrutura o payload no formato EXATO que a API PHP espera
+    const apiPayload = {
+      body: mensagemTexto,          // Campo 'body' (obrigatório) → vai para gn_msg
+      gn_json: jsonCompleto         // Campo adicional → vai para gn_json
+    };
+
+    await axios.post(url, apiPayload, {
+      headers: {
+        'Content-Type': 'application/json',
+        'Accept': 'application/json'
+      },
+      timeout: 10000
+    });
+    
+    console.log(`✅ Webhook enviado com sucesso para: ${url}`);
   } catch (err) {
     console.error("Erro ao enviar para WebHook:", err.message);
+  }
+}
+
+// Função para extrair TODAS as informações de uma mensagem
+function extractAllMessageData(msg) {
+  try {
+    const messageData = {
+      // Informações básicas
+      id: msg.id ? msg.id._serialized : null,
+      from: msg.from,
+      to: msg.to,
+      fromMe: msg.fromMe,
+      timestamp: msg.timestamp,
+      hasMedia: msg.hasMedia,
+      hasQuotedMsg: msg.hasQuotedMsg,
+      isForwarded: msg.isForwarded,
+      isStatus: msg.isStatus,
+      isEphemeral: msg.isEphemeral,
+      
+      // Conteúdo da mensagem
+      body: msg.body,
+      type: msg.type,
+      mimetype: msg.mimetype || null,
+      mediaKey: msg.mediaKey || null,
+      filename: msg.filename || null,
+      clientUrl: msg.clientUrl || null,
+      deprecatedMms3Url: msg.deprecatedMms3Url || null,
+      
+      // Informações de localização
+      location: msg.location ? {
+        latitude: msg.location.latitude,
+        longitude: msg.location.longitude,
+        description: msg.location.description
+      } : null,
+      
+      // Informações de contato
+      vCards: msg.vCards || [],
+      mentionedIds: msg.mentionedIds || [],
+      
+      // Informações de reação
+      hasReaction: msg.hasReaction,
+      reactions: msg.reactions || [],
+      
+      // Informações de encaminhamento
+      forwardingScore: msg.forwardingScore || 0,
+      isForwarded: msg.isForwarded,
+      
+      // Informações de citação
+      quotedMsg: null,
+      quotedMsgId: msg.quotedMsgId ? msg.quotedMsgId._serialized : null,
+      
+      // Informações de status de entrega
+      ack: msg.ack,
+      broadcast: msg.broadcast || false,
+      
+      // Informações de dispositivo
+      deviceType: msg.deviceType || 'unknown',
+      
+      // Informações de temporização
+      duration: msg.duration || null,
+      seconds: msg.seconds || null,
+      
+      // Metadados adicionais
+      author: msg.author || null,
+      notifyName: msg.notifyName || null,
+      caption: msg.caption || null,
+      
+      // Informações de chat/grupo
+      isGroupMsg: msg.isGroupMsg,
+      isMedia: msg.isMedia,
+      isNotification: msg.isNotification,
+      isPSA: msg.isPSA,
+      
+      // Raw data (se disponível)
+      rawData: msg.rawData ? JSON.parse(JSON.stringify(msg.rawData)) : null
+
+    };
+
+    return messageData;
+  } catch (error) {
+    console.error("Erro ao extrair dados da mensagem:", error);
+    return { error: "Falha ao extrair dados da mensagem", originalError: error.message };
   }
 }
 
@@ -115,15 +233,20 @@ app.post(
       });
 
       // Conexão efetuada
+      let connectionTimestamp = null; // Armazena o momento da conexão
+
       client.on("ready", () => {
         try {
           instanceInfo[token].numero = client.info.wid.user;
+          connectionTimestamp = Date.now(); // Marca o momento da conexão
           console.log(`[${instanceInfo[token].nome}] ✅ Cliente conectado! Token: ${token} Número: ${instanceInfo[token].numero}`);
           clearTimeout(qrCodeTimeout);
           delete qrCodes[token];
           sendWebhook(instanceInfo[token].webhook, {
             evento: "conexao_estabelecida",
             nome: instanceInfo[token].nome,
+            numero: instanceInfo[token].numero,
+            token: token
           });
         } catch (err) {
           console.error("Erro no evento ready:", err);
@@ -133,6 +256,11 @@ app.post(
       // Autenticação efetuada
       client.on("authenticated", () => {
         console.log(`[${instanceInfo[token].nome}] 🔐 Autenticado`);
+        sendWebhook(instanceInfo[token].webhook, {
+          evento: "autenticado",
+          nome: instanceInfo[token].nome,
+          token: token
+        });
       });
 
       // Desconexão ou erro
@@ -144,7 +272,9 @@ app.post(
           delete instanceInfo[token];
           sendWebhook(instanceInfo[token].webhook, {
             evento: "desconectado",
-            nome: instanceInfo[token]?.nome
+            nome: instanceInfo[token]?.nome,
+            motivo: reason,
+            token: token
           });
         } catch (err) {
           console.error("Erro no evento disconnected:", err);
@@ -155,181 +285,246 @@ app.post(
 
       // Mensagens enviadas
       client.on("message_create", async (msg) => {
-        mensagensMonitoradas.add(msg.id._serialized);
-        let v_no_remetente;
-        let v_no_destinatario;
-        let v_ds_mensagem;
-        let v_dh_mensagem;
-        let v_sg_tipo; // E - Enviada, R - Recebida
-        let v_is_respondida = msg.hasQuotedMsg ? "t" : "f";
-        let v_is_encaminhada = msg.isForwarded ? "t" : "f";
-        let v_mensagem_respondida = null;
-
-        if (msg.hasQuotedMsg) {
         try {
-            const quotedMsg = await msg.getQuotedMessage();
-            v_mensagem_respondida = quotedMsg.body;
-        } catch (e) {
-            v_mensagem_respondida = null;
-        }
-    }
-
-        try {
-            if (msg.fromMe) {
-                v_sg_tipo = "E";
-                v_no_remetente = instanceInfo[token].numero;
-                v_no_destinatario = msg.to;
-            } else {
-                v_sg_tipo = "R";
-                v_no_remetente = msg.from;
-                v_no_destinatario = instanceInfo[token].numero;
-            }
-            v_ds_mensagem = msg.body;
-            v_dh_mensagem = new Date().toISOString();
-
-            messages.push({
-                token,
-                remetente: v_no_remetente,
-                destinatario: v_no_destinatario,
-                mensagem: v_ds_mensagem,
-                dataHora: v_dh_mensagem,
-                respondida: v_is_respondida,
-                encaminhada: v_is_encaminhada,
-                mensagem_respondida: v_mensagem_respondida,
-            });
-
-            let logMsg = `[${v_no_remetente}] Mensagem enviada para ${v_no_destinatario}: ${v_ds_mensagem}`;
-            if (v_is_respondida === "t" && v_mensagem_respondida) {
-                logMsg += ` (responde à mensagem: "${v_mensagem_respondida}")`;
-            }
-            if (v_is_encaminhada === "t") {
-                logMsg += " [Mensagem encaminhada]";
-            }
-            console.log(logMsg);
-
-            sendWebhook(instanceInfo[token].webhook, {
-                evento: (v_sg_tipo === "E") ? "Envio de Mensagem" : "Recebimento de Mensagem",
-                nome: instanceInfo[token].nome,
-                messages: {
-                    tipo: v_sg_tipo,
-                    remetente: v_no_remetente,
-                    destinatario: v_no_destinatario,
-                    mensagem: v_ds_mensagem,
-                    dataHora: v_dh_mensagem,
-                    respondida: v_is_respondida,
-                    encaminhada: v_is_encaminhada,
-                    mensagem_respondida: v_mensagem_respondida,
-                },
-            });
-
-            // Se for mídia, baixar e salvar
-            if (msg.hasMedia) {
-                const media = await msg.downloadMedia();
-                let v_no_tipo = media.mimetype.split("/")[0];
-                let v_no_extensao = media.mimetype.split("/")[1];
-                v_no_extensao = v_no_extensao.includes(";") ? v_no_extensao.split(";")[0] : v_no_extensao;
-                const v_no_arquivo = v_no_tipo + '_' + Date.now() + '.' + v_no_extensao;
-
-                const acao = v_sg_tipo === "E" ? "enviada" : "recebida";
-                console.log(`[${instanceInfo[token].nome}] 📎 Mensagem de mídia ${acao}: ${v_no_arquivo}`);
-
-                const pastaDestino = path.join(__dirname, v_sg_tipo, v_no_tipo);
-                if (!fs.existsSync(pastaDestino)) {
-                    fs.mkdirSync(pastaDestino, { recursive: true });
-                }
-
-                const v_no_path_arquivo = path.join(pastaDestino, v_no_arquivo);
-
-                if (media.mimetype.startsWith("image") || media.mimetype.startsWith("audio") || media.mimetype.startsWith("video")) {
-                    fs.writeFileSync(v_no_path_arquivo, media.data, "base64");
-                } else {
-                    fs.writeFileSync(v_no_path_arquivo, Buffer.from(media.data, "base64"));
-                }
-
-                sendWebhook(instanceInfo[token].webhook, {
-                    evento: "Mensagem de Mídia",
-                    nome: instanceInfo[token].nome,
-                    messages: {
-                        remetente: v_no_remetente,
-                        destinatario: v_no_destinatario,
-                        mensagem: "Conteúdo de mídia",
-                        dataHora: v_dh_mensagem,
-                        tipo: v_no_tipo,
-                        mídia: v_no_path_arquivo
-                    },
-                });
-                return;
-            }
-        } catch (err) {
-            console.error("Erro no evento message_create:", err);
-        }
-    });
-
-    // Captura reações somente em mensagens criadas nesta sessão
-    client.on("message_reaction", async (reaction) => {
-        try {
-            if (!mensagensMonitoradas.has(reaction.msgId._serialized)) {
-                return; // Ignora reações a mensagens antigas
-            }
-
-            const remetente = reaction.senderId;
-            const emoji = reaction.emoji;
-            let v_conteudo_mensagem = null;
-
+          mensagensMonitoradas.add(msg.id._serialized);
+          
+          // Extrair TODOS os dados da mensagem
+          const messageData = extractAllMessageData(msg);
+          
+          // Adicionar informações adicionais
+          messageData.instanceInfo = {
+            nome: instanceInfo[token].nome,
+            token: token,
+            numero: instanceInfo[token].numero
+          };
+          console.log(msg)
+          
+          messageData.eventType = msg.fromMe ? "mensagem_enviada" : "mensagem_recebida";
+          messageData.timestampISO = new Date().toISOString();
+          
+          // Processar mensagem citada se existir
+          if (msg.hasQuotedMsg) {
             try {
-                const mensagemReagida = await client.getMessageById(reaction.msgId._serialized);
-                v_conteudo_mensagem = mensagemReagida?.body || "[Mídia ou mensagem sem texto]";
+              const quotedMsg = await msg.getQuotedMessage();
+              messageData.quotedMsg = extractAllMessageData(quotedMsg);
             } catch (e) {
-                v_conteudo_mensagem = "[Não foi possível obter o conteúdo]";
+              messageData.quotedMsg = { error: "Não foi possível obter a mensagem citada" };
             }
-
-            console.log(
-                `[${instanceInfo[token]?.nome || "Instância"}] Reação recebida: ${emoji} de ${remetente} na mensagem: "${v_conteudo_mensagem}"`
-            );
-
-            sendWebhook(instanceInfo[token]?.webhook, {
-                evento: "Reacao em Mensagem",
-                nome: instanceInfo[token]?.nome,
-                reacao: {
-                    remetente,
-                    emoji,
-                    conteudo_mensagem_reagida: v_conteudo_mensagem,
-                },
-            });
+          }
+          
+          // Baixar mídia se existir
+          if (msg.hasMedia) {
+            try {
+              const media = await msg.downloadMedia();
+              messageData.media = {
+                mimetype: media.mimetype,
+                data: media.data,
+                filesize: media.data.length,
+                filename: msg.filename || `media_${Date.now()}.${media.mimetype.split('/')[1]}`
+              };
+              
+              // Salvar arquivo de mídia
+              const mediaType = media.mimetype.split('/')[0];
+              const extension = media.mimetype.split('/')[1].split(';')[0];
+              const filename = `${mediaType}_${Date.now()}.${extension}`;
+              const folderPath = path.join(__dirname, messageData.eventType === "mensagem_enviada" ? "enviadas" : "recebidas", mediaType);
+              
+              if (!fs.existsSync(folderPath)) {
+                fs.mkdirSync(folderPath, { recursive: true });
+              }
+              
+              const filePath = path.join(folderPath, filename);
+              fs.writeFileSync(filePath, media.data, 'base64');
+              
+              messageData.media.filePath = filePath;
+              messageData.media.saved = true;
+              
+            } catch (mediaError) {
+              messageData.media = { error: "Falha ao processar mídia", details: mediaError.message };
+            }
+          }
+          
+          // Adicionar ao histórico de mensagens
+          messages.push(messageData);
+          
+          // Log no console
+          console.log(`[${instanceInfo[token].nome}] 📨 ${messageData.eventType === "mensagem_enviada" ? "Enviada" : "Recebida"} de ${msg.fromMe ? instanceInfo[token].numero : msg.from} para ${msg.fromMe ? msg.to : instanceInfo[token].numero}: ${msg.body || "[Mídia]"}`);
+          
+          // Enviar TODOS os dados para o webhook
+          sendWebhook(instanceInfo[token].webhook, {
+            evento: messageData.eventType,
+            timestamp: new Date().toISOString(),
+            mensagem_completa: messageData
+          });
+          
         } catch (err) {
-            console.error("Erro ao processar reação:", err);
-        }
-    });
-
-      client.on("message_reaction", async (reaction) => {
-        try {
-          const remetente = reaction.senderId;
-          const emoji = reaction.emoji;
-          // Buscar o conteúdo da mensagem reagida
-          let v_conteudo_mensagem = null;
+          console.error("Erro no evento message_create:", err);
+          // Mesmo em caso de erro, tentar enviar o máximo de informações possível
           try {
-            const mensagemReagida = await client.getMessageById(reaction.msgId._serialized || reaction.msgId.id || reaction.msgId);
-            v_conteudo_mensagem = mensagemReagida?.body || "[Mídia ou mensagem sem texto]";
-          } catch (e) {
-            v_conteudo_mensagem = "[Não foi possível obter o conteúdo]";
+            sendWebhook(instanceInfo[token].webhook, {
+              evento: "erro_no_processamento_da_mensagem",
+              timestamp: new Date().toISOString(),
+              erro: err.message,
+              mensagem_basica: {
+                id: msg.id ? msg.id._serialized : "unknown",
+                from: msg.from,
+                to: msg.to,
+                body: msg.body,
+                hasMedia: msg.hasMedia
+              }
+            });
+          } catch (webhookError) {
+            console.error("Erro ao enviar webhook de erro:", webhookError);
+          }
+        }
+      });
+
+      // Status da mensagem (enviada, entregue, lida)
+      client.on("message_ack", (msg, ack) => {
+        try {
+          let status;
+          switch (ack) {
+            case 0: status = "pendente"; break;   // Ainda não enviada
+            case 1: status = "enviada"; break;    // ✔️ enviada ao servidor
+            case 2: status = "entregue"; break;   // ✔️✔️ entregue ao contato
+            case 3: status = "lida"; break;       // Azul = lida
+            case 4: status = "reproduzida"; break; // Para áudios/vídeos
+            default: status = "desconhecido";
           }
 
           console.log(
-            `[${instanceInfo[token]?.nome || "Instância"}] Reação recebida: ${emoji} de ${remetente} na mensagem: "${v_conteudo_mensagem}"`
+            `[${instanceInfo[token]?.nome}] 📡 Mensagem ${msg.id._serialized} mudou status para: ${status}`
           );
 
+          // Extrair dados completos da mensagem para o status
+          const messageData = extractAllMessageData(msg);
+          
           sendWebhook(instanceInfo[token]?.webhook, {
-            evento: "Reacao em Mensagem",
-            nome: instanceInfo[token]?.nome,
-            reacao: {
-              remetente,
-              emoji,
-              conteudo_mensagem_reagida: v_conteudo_mensagem,
-            },
+            evento: "status_mensagem",
+            timestamp: new Date().toISOString(),
+            status: status,
+            mensagem_completa: messageData,
+            informacoes_adicionais: {
+              nome: instanceInfo[token]?.nome,
+              token: token,
+              numero: instanceInfo[token]?.numero
+            }
           });
         } catch (err) {
-          console.error("Erro ao processar reação:", err);
+          console.error("Erro ao processar status da mensagem:", err);
         }
+      });
+
+    // Captura reações somente em mensagens criadas após a conexão
+    client.on("message_reaction", async (reaction) => {
+        try {
+            // Busca a mensagem reagida para pegar o timestamp dela
+            let mensagemReagida;
+            try {
+              mensagemReagida = await client.getMessageById(reaction.msgId._serialized);
+            } catch (e) {
+              mensagemReagida = null;
+            }
+
+            // Se não conseguir buscar a mensagem, ou se ela for anterior à conexão, ignora
+            if (
+              !mensagemReagida ||
+              !mensagemReagida.timestamp ||
+              (connectionTimestamp && mensagemReagida.timestamp * 1000 < connectionTimestamp)
+            ) {
+              return;
+            }
+
+            // Extrair dados completos da mensagem reagida
+            const messageData = extractAllMessageData(mensagemReagida);
+            
+            const reactionData = {
+              remetente: reaction.senderId,
+              emoji: reaction.emoji,
+              id_mensagem: reaction.msgId._serialized,
+              timestamp: new Date().toISOString(),
+              mensagem_reagida: messageData
+            };
+
+            console.log(
+              `[${instanceInfo[token]?.nome || "Instância"}] Reação recebida: ${reaction.emoji} de ${reaction.senderId}`
+            );
+
+            sendWebhook(instanceInfo[token]?.webhook, {
+              evento: "reacao_mensagem",
+              timestamp: new Date().toISOString(),
+              reacao_completa: reactionData,
+              informacoes_adicionais: {
+                nome: instanceInfo[token]?.nome,
+                token: token,
+                numero: instanceInfo[token]?.numero
+              }
+            });
+          } catch (err) {
+            console.error("Erro ao processar reação:", err);
+          }
+    });
+
+      // Captura edições de mensagens
+      client.on("message_edit", async (msg) => {
+          try {
+              // Extrair dados completos da mensagem editada
+              const messageData = extractAllMessageData(msg);
+              
+              const editData = {
+                id_mensagem: msg.id._serialized,
+                novo_conteudo: msg.body,
+                remetente: msg.from,
+                destinatario: msg.to || instanceInfo[token]?.numero,
+                timestamp: new Date().toISOString(),
+                mensagem_completa: messageData
+              };
+
+              console.log(
+                  `[${instanceInfo[token]?.nome || "Instância"}] Mensagem editada [${msg.id._serialized}] por ${msg.from}`
+              );
+
+              sendWebhook(instanceInfo[token]?.webhook, {
+                  evento: "edicao_mensagem",
+                  timestamp: new Date().toISOString(),
+                  edicao_completa: editData,
+                  informacoes_adicionais: {
+                    nome: instanceInfo[token]?.nome,
+                    token: token,
+                    numero: instanceInfo[token]?.numero
+                  }
+              });
+          } catch (err) {
+              console.error("Erro ao processar edição de mensagem:", err);
+          }
+      });
+
+      // Evento de mudança no estado de conexão
+      client.on("change_state", (state) => {
+        sendWebhook(instanceInfo[token]?.webhook, {
+          evento: "mudanca_estado_conexao",
+          timestamp: new Date().toISOString(),
+          estado: state,
+          informacoes_adicionais: {
+            nome: instanceInfo[token]?.nome,
+            token: token,
+            numero: instanceInfo[token]?.numero
+          }
+        });
+      });
+
+      // Evento de mudança na bateria
+      client.on("change_battery", (batteryInfo) => {
+        sendWebhook(instanceInfo[token]?.webhook, {
+          evento: "mudanca_bateria",
+          timestamp: new Date().toISOString(),
+          bateria: batteryInfo,
+          informacoes_adicionais: {
+            nome: instanceInfo[token]?.nome,
+            token: token,
+            numero: instanceInfo[token]?.numero
+          }
+        });
       });
 
       // Iniciar cliente
@@ -401,14 +596,30 @@ app.post(
           : `55${numberDDD}${numberUser}@c.us`;
 
       const response = await client.sendMessage(numberZDG, message);
-      res.status(200).json({ status: true, message: "Mensagem enviada com sucesso", response });
-      sendWebhook(instanceInfo[token].webhook, {
-        evento: "mensagem_enviada_com_sucesso",
+      
+      // Extrair dados completos da mensagem enviada
+      const messageData = extractAllMessageData(response);
+      messageData.instanceInfo = {
         nome: instanceInfo[token].nome,
+        token: token,
+        numero: instanceInfo[token].numero
+      };
+      
+      res.status(200).json({ 
+        status: true, 
+        message: "Mensagem enviada com sucesso", 
+        response: messageData 
       });
+      
+      sendWebhook(instanceInfo[token].webhook, {
+        evento: "mensagem_enviada_api",
+        timestamp: new Date().toISOString(),
+        mensagem_completa: messageData
+      });
+      
     } catch (err) {
       console.error("Erro ao enviar mensagem:", err);
-      res.status(500).json({ status: false, message: "Erro ao enviar mensagem", response: err.message });
+      res.status(500).json({ status: false, message: "Erro ao enviar mensagem", error: err.message });
     }
   }
 );
@@ -435,6 +646,7 @@ app.get("/instancias", (req, res) => {
       nome: instanceInfo[token]?.nome || "Desconhecido",
       numero: instanceInfo[token]?.numero || "Desconhecido",
       webhook: instanceInfo[token]?.webhook || "Não definido",
+      status: "conectada"
     }));
 
     res.json({ status: true, total: conectadas.length, instancias: conectadas });
