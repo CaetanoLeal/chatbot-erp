@@ -19,5 +19,4 @@ rm google-chrome-stable_current_amd64.deb
 
 # Limpa o cache do apt
 apt-get clean
-rm -rf /var/lib/apt/lists/*
-
+rm -rf /var/lib/apt/lists/
