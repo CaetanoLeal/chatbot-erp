@@ -1,116 +1,207 @@
-// chatbot.js
-const express = require('express');
-const cors = require('cors');
-const { body, validationResult } = require('express-validator');
-const { v4: uuidv4 } = require('uuid');
-const instanceManager = require('./InstanceManager');
+// InstanceManager.js
+const { Client, LocalAuth } = require('whatsapp-web.js');
+const qrcode = require('qrcode-terminal');
+const EventEmitter = require('events');
+const puppeteer = require('puppeteer');
 
-const app = express();
-const PORT = 3000;
+class InstanceManager extends EventEmitter {
+  constructor() {
+    super();
+    this.instances = new Map();
+  }
 
-app.use(cors());
-app.use(express.json());
+  /* ===============================
+   * Criar instância
+   * =============================== */
+  async createInstance(instanceId, name, webhookUrl) {
+    // 🔒 LOCK forte
+    if (this.instances.has(instanceId)) {
+      const inst = this.instances.get(instanceId);
+      console.log(`[${name}] ⚠ Instância já existe (${inst.status})`);
+      return inst;
+    }
 
-// erros globais
-process.on('uncaughtException', err => console.error("❌ Erro não capturado:", err));
-process.on('unhandledRejection', err => console.error("❌ Promise rejeitada:", err));
+    console.log(`[${name}] 🚀 Criando instância...`);
 
-/* Utilitário */
-function formatWhatsappNumber(number) {
-  const cleaned = number.replace(/\D/g, '');
-  if (cleaned.length === 11) return `55${cleaned}@c.us`;
-  if (cleaned.length === 13 && cleaned.startsWith('55')) return `${cleaned}@c.us`;
-  throw new Error("Número inválido. Use 11999998888");
-}
+    const client = new Client({
+      authStrategy: new LocalAuth({ clientId: instanceId }),
+      puppeteer: {
+        headless: true,
+        executablePath:
+          process.env.PUPPETEER_EXECUTABLE_PATH ||
+          puppeteer.executablePath(),
+        args: [
+          '--no-sandbox',
+          '--disable-setuid-sandbox',
+          '--disable-dev-shm-usage',
+          '--disable-extensions',
+          '--disable-gpu',
+          '--no-first-run',
+          '--no-zygote',
+        ],
+      },
+    });
 
-/* ─────────────── ROTAS ─────────────── */
+    const instanceData = {
+      id: instanceId,
+      name,
+      webhook: webhookUrl,
+      client,
+      status: 'INITIALIZING',
+      qrCode: null,
+      userInfo: null,
+      _eventsBound: false,
+      _destroying: false,
+    };
 
-// Criar instância
-app.post(
-  '/instances/create',
-  [body('name').notEmpty(), body('webhookUrl').optional().isURL()],
-  async (req, res, next) => {
-
-    const errors = validationResult(req);
-    if (!errors.isEmpty()) return res.status(400).json({ errors: errors.array() });
+    this.instances.set(instanceId, instanceData);
+    this.setupEvents(instanceData);
 
     try {
-      const { name, webhookUrl } = req.body;
-      const instanceId = uuidv4();
-
-      // CRUCIAL: garantir que só cria UMA VEZ
-      const data = await instanceManager.createInstance(instanceId, name, webhookUrl);
-
-      res.status(201).json({
-        status: true,
-        message: 'Instância iniciada. Consulte o status para pegar o QR code.',
-        instanceId,
-        name,
-      });
-
+      await client.initialize();
+      return instanceData;
     } catch (err) {
-      next(err);
+      console.error(`[${name}] ❌ Erro ao inicializar:`, err);
+      await this.safeRemoveInstance(instanceId);
+      throw err;
     }
   }
-);
 
-// Listar instâncias
-app.get('/instances', (req, res) => {
-  res.json({ status: true, data: instanceManager.listAllInstances() });
-});
+  /* ===============================
+   * Bind de eventos (1x apenas)
+   * =============================== */
+  setupEvents(instance) {
+    if (instance._eventsBound) return;
+    instance._eventsBound = true;
 
-// Pegar status
-app.get('/instances/:instanceId', (req, res) => {
-  const info = instanceManager.getInstanceInfo(req.params.instanceId);
-  if (!info) return res.status(404).json({ status: false, message: 'Instância não encontrada.' });
-  res.json({ status: true, data: info });
-});
+    const { client, name } = instance;
 
-// Enviar mensagem
-app.post(
-  '/instances/:instanceId/message',
-  [body('number').notEmpty(), body('message').notEmpty()],
-  async (req, res, next) => {
-
-    const errors = validationResult(req);
-    if (!errors.isEmpty()) return res.status(400).json({ errors: errors.array() });
-
-    try {
-      const { instanceId } = req.params;
-      const { number, message } = req.body;
-
-      const instance = instanceManager.getInstance(instanceId);
-
-      if (!instance || instance.status !== 'CONNECTED') {
-        return res.status(404).json({
-          status: false,
-          message: 'Instância não encontrada ou não conectada.'
-        });
+    /* 📱 QR CODE */
+    client.on('qr', qr => {
+      if (
+        instance.status === 'AUTHENTICATED' ||
+        instance.status === 'CONNECTED'
+      ) {
+        console.log(`[${name}] ⚠ QR ignorado (já autenticado)`);
+        return;
       }
 
-      const formatted = formatWhatsappNumber(number);
-      const response = await instance.client.sendMessage(formatted, message);
+      console.log(`[${name}] 📱 QR Code gerado.`);
+      instance.status = 'SCAN_QR_CODE';
+      instance.qrCode = qr;
 
-      res.json({ status: true, message: 'Mensagem enviada!', data: response });
+      qrcode.generate(qr, { small: true });
+    });
 
-    } catch (err) {
-      next(err);
-    }
+    /* 🔐 AUTHENTICATED */
+    client.on('authenticated', () => {
+      if (
+        instance.status !== 'INITIALIZING' &&
+        instance.status !== 'SCAN_QR_CODE'
+      ) {
+        return;
+      }
+
+      console.log(`[${name}] 🔐 Autenticado.`);
+      instance.status = 'AUTHENTICATED';
+    });
+
+    /* ✅ READY */
+    client.on('ready', () => {
+      if (instance.status === 'CONNECTED') return;
+
+      console.log(`[${name}] ✅ Conectado!`);
+      instance.status = 'CONNECTED';
+      instance.qrCode = null;
+      instance.userInfo = client.info;
+    });
+
+    /* 📨 MENSAGENS (apenas log) */
+    client.on('message_create', msg => {
+      const type = msg.fromMe
+        ? 'message_sent'
+        : 'message_received';
+
+      console.log(
+        `[${name}] 📨 ${type}: ${msg.body || '[mídia]'}`
+      );
+    });
+
+    /* ❌ AUTH FAILURE */
+    client.on('auth_failure', msg => {
+      console.log(`[${name}] ❌ Falha de autenticação:`, msg);
+      this.safeRemoveInstance(instance.id);
+    });
+
+    /* 🔌 DISCONNECTED */
+    client.on('disconnected', async reason => {
+      if (
+        instance._destroying ||
+        instance.status === 'DISCONNECTED'
+      ) {
+        return;
+      }
+
+      console.log(`[${name}] 🔌 Desconectado:`, reason);
+      instance.status = 'DISCONNECTED';
+
+      // Se logout/unpaired → precisa de novo QR
+      if (reason === 'LOGOUT' || reason === 'UNPAIRED') {
+        console.log(
+          `[${name}] ⚠ Sessão invalidada. Novo QR será necessário.`
+        );
+      }
+
+      // Delay para evitar race condition
+      setTimeout(() => {
+        this.safeRemoveInstance(instance.id);
+      }, 15000);
+    });
   }
-);
 
-// Remover instância
-app.delete('/instances/:instanceId', async (req, res) => {
-  await instanceManager.safeRemoveInstance(req.params.instanceId);
-  res.json({ status: true, message: 'Instância removida com sucesso.' });
-});
+  /* ===============================
+   * Remoção segura
+   * =============================== */
+  async safeRemoveInstance(instanceId) {
+    const instance = this.instances.get(instanceId);
+    if (!instance || instance._destroying) return;
 
-// fallback
-app.use((err, req, res, next) => {
-  console.error("❌ Erro:", err.stack);
-  res.status(500).json({ status: false, error: err.message });
-});
+    instance._destroying = true;
 
-app.listen(PORT, '0.0.0.0', () =>
-  console.log(`✅ Servidor rodando na porta ${PORT}`)
-);
+    console.log(`[${instance.name}] 🧹 Encerrando instância...`);
+
+    try {
+      await instance.client.destroy();
+    } catch (_) {}
+
+    this.instances.delete(instanceId);
+  }
+
+  /* ===============================
+   * Utils
+   * =============================== */
+  getInstance(id) {
+    return this.instances.get(id);
+  }
+
+  getInstanceInfo(id) {
+    const i = this.instances.get(id);
+    if (!i) return null;
+
+    return {
+      id: i.id,
+      name: i.name,
+      status: i.status,
+      userInfo: i.userInfo,
+      qrCode: i.qrCode,
+    };
+  }
+
+  listAllInstances() {
+    return [...this.instances.values()].map(i =>
+      this.getInstanceInfo(i.id)
+    );
+  }
+}
+
+module.exports = new InstanceManager();
