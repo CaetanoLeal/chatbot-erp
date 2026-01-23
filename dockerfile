@@ -49,8 +49,8 @@ WORKDIR /usr/src/app
 COPY package*.json ./
 
 # Instala as dependências (sem baixar o Chromium via Puppeteer)
-RUN npm install
-
+RUN npm install --production
+RUN npm install uuid
 # Copia o restante do código
 COPY . .
 
