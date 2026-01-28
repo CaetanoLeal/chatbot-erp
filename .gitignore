@@ -1,0 +1,54 @@
+# =========================
+# Node.js
+# =========================
+node_modules/
+npm-debug.log*
+yarn-debug.log*
+yarn-error.log*
+
+# =========================
+# Environment / Secrets
+# =========================
+.env
+.env.*
+*.env
+
+# =========================
+# Auth / Sessions (WhatsApp, Telegram, etc)
+# =========================
+auth/
+.webjs_auth/
+recebidas/
+
+# =========================
+# Docker
+# =========================
+.dockerignore
+
+# =========================
+# Logs
+# =========================
+logs/
+*.log
+
+# =========================
+# OS / Editor
+# =========================
+.DS_Store
+Thumbs.db
+.vscode/
+.idea/
+
+# =========================
+# Temporary / Backup
+# =========================
+*.tmp
+*.bak
+*.swp
+
+# =========================
+# Coverage / Build
+# =========================
+coverage/
+dist/
+build/
