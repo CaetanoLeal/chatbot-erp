@@ -142,6 +142,10 @@ class InstanceManager extends EventEmitter {
 
     /* ===== MENSAGENS RECEBIDAS ===== */
     sock.ev.on('messages.upsert', async ({ messages, type }) => {
+       console.log(
+        '[MENSAGEM CRUA]',
+        JSON.stringify({ messages, type }, null, 2)
+      );
       if (type !== 'notify') return;
 
       const msg = messages[0];
@@ -159,6 +163,7 @@ class InstanceManager extends EventEmitter {
         },
         whatsapp: {
           jid: msg.key.remoteJid,
+          jidAlt: msg.key.remoteJidAlt,
           messageId: msg.key.id,
           pushName: msg.pushName || null,
           timestamp: msg.messageTimestamp
