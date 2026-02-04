@@ -1,59 +1,292 @@
-# ChatBotWhatsapp
+# 💬 Container chatbot-erp – WhatsApp Instance Manager
 
-This is a free and easily modifiable WhatsApp chatbot. To connect, simply scan the QR code with WhatsApp Web.
+Este container é o **gerenciador de instâncias do WhatsApp**. Ele conecta números via Baileys, mantém sessões ativas, escuta eventos do WhatsApp e **encaminha tudo para a API principal (`api_mensagem`) via webhook**.
 
-## Technologies Used
+> ⚠️ Importante: **não existe lógica de negócio aqui**. Este serviço **não decide fluxo**, **não valida respostas** e **não mantém estado conversacional**. Ele apenas conecta, envia e repassa eventos.
 
-- [whatsapp-web.js](https://github.com/pedroslopez/whatsapp-web.js/): A library to interact with WhatsApp Web.
-- [qr-code-terminal](https://github.com/gtaranuq/qr-code-terminal): Displays QR codes directly in the terminal to facilitate authentication.
+---
 
-> [!IMPORTANT]
-> **It is not guaranteed you will not be blocked by using this method. WhatsApp does not allow bots or unofficial clients on their platform, so this shouldn't be considered totally safe.**
+## 🎯 Objetivo
 
+- Criar e gerenciar múltiplas instâncias WhatsApp
+- Gerar QR Code para autenticação
+- Manter sessões persistentes (auth state)
+- Enviar mensagens sob comando externo
+- Encaminhar mensagens recebidas e ACKs para a API principal
 
-## How It Works
+---
 
-This chatbot has several trigger messages for activation. When a user sends an activation message to the user's private chat, the bot will send a greeting message and ask the user to choose one of the available options. Each selected option will result in a different response from the chatbot.
+## 📦 Papel na Arquitetura
 
-## Prerequisites
+```
+[ WhatsApp App ]
+        ↓
+[ chatbot-erp ]        ← Instance Manager
+        ↓ (webhook)
+[ api_mensagem ]       ← Regras de negócio
+```
+
+Este container é **stateful em conexão**, mas **stateless em negócio**.
+
+---
+
+## 🧱 Stack Utilizada
 
 - Node.js
-- NPM
+- Express
+- @whiskeysockets/baileys
+- Axios
+- EventEmitter
+- Multi-file Auth State (Baileys)
 
-## Installation
+---
 
-1. Clone this repository:
+## 📂 Arquivos Principais
 
-    ```bash
-    git clone https://github.com/CaetanoLeal/ChatBotWhatsapp.git
-    ```
+### `chatbot.js`
 
-2. Navigate to the project directory:
+Responsável por:
 
-    ```bash
-    cd ChatBotWhatsapp
-    ```
+- Subir o servidor HTTP
+- Expor endpoints REST
+- Delegar ações ao `InstanceManager`
 
-3. Install the dependencies:
+---
 
-    ```bash
-    npm install
-    ```
+### `InstanceManager.js`
 
-## Usage
+Coração do container.
 
-1. Run the bot:
+Responsável por:
 
-    ```bash
-    node Caebot.js
-    ```
+- Criar instâncias WhatsApp
+- Manter mapa de instâncias em memória
+- Lidar com eventos do Baileys
+- Enviar mensagens com segurança
+- Detectar degradação de conexão
+- Reencaminhar eventos para webhook
 
-2. The QR code will be generated and displayed in the terminal when you run the command `node Caebot.js`. Scan the code with WhatsApp on your phone to authenticate.
+---
 
-3. After authentication, the bot will send a confirmation message in the terminal and will be ready to receive and respond to messages.
+### `WebhookService.js`
 
-![QR Code](assets/qrcode.png)
+Responsável por:
 
-## Modifications
+- Enviar eventos HTTP POST para a API principal
+- Padronizar headers
+- Controlar timeout e logs
 
-Feel free to make your modifications and use it as you wish! This is a demonstration code, so fork or clone the repository and create your own, more complex chatbot based on this one.
+---
+
+## 🧩 Conceito de Instância
+
+Uma **instância** representa **um número de WhatsApp conectado**.
+
+Campos principais:
+
+- `id` → UUID interno
+- `name` → nome lógico (ex: empresa_x)
+- `status` → estado atual da conexão
+- `sock` → socket Baileys
+- `webhook` → URL da API principal
+
+---
+
+## 🔌 Ciclo de Vida da Instância
+
+### 1️⃣ Criação
+
+**Endpoint**
+
+```
+POST /instances/create
+```
+
+**Body**
+
+```json
+{
+  "name": "empresa_x",
+  "webhookUrl": "http://api_mensagem/webhook/whatsapp"
+}
+```
+
+Comportamento:
+
+- Cria diretório de autenticação
+- Inicializa socket Baileys
+- Instância entra em estado `INITIALIZING`
+
+---
+
+### 2️⃣ QR Code
+
+- Ao receber QR:
+  - Status → `SCAN_QR_CODE`
+  - QR armazenado em memória
+  - QR impresso no terminal
+
+---
+
+### 3️⃣ Conectado
+
+Quando a conexão abre:
+
+- Status → `CONNECTED`
+- Informações do usuário carregadas
+- QR Code limpo
+- Mensagem de sanidade enviada para si mesmo (`ping`)
+
+---
+
+### 4️⃣ Desconexão
+
+- Status → `DISCONNECTED`
+- Se logout → instância removida
+- Se erro transitório → reconexão automática
+
+---
+
+## 📊 Estados da Instância
+
+| Status       | Significado              |
+| ------------ | ------------------------ |
+| INITIALIZING | Criando socket           |
+| SCAN_QR_CODE | Aguardando leitura do QR |
+| CONNECTED    | Conectado e operacional  |
+| DEGRADED     | ACK parcial (instável)   |
+| DISCONNECTED | Conexão encerrada        |
+| INVALID      | Socket inválido          |
+
+---
+
+## 📩 Mensagens Recebidas
+
+Evento Baileys:
+
+```
+messages.upsert (notify)
+```
+
+Processo:
+
+- Ignora mensagens próprias
+- Ignora mensagens de sistema
+- Extrai tipo e texto
+- Monta payload padronizado
+- Envia webhook para a API principal
+
+**Payload enviado**
+
+```json
+{
+  "event": "message.received",
+  "instance": { "id": "...", "name": "empresa_x" },
+  "whatsapp": {
+    "jid": "...",
+    "jidAlt": "...",
+    "messageId": "...",
+    "pushName": "..."
+  },
+  "message": {
+    "type": "text",
+    "text": "Olá",
+    "raw": {}
+  }
+}
+```
+
+⚠️ `jid` e `jidAlt` podem variar — a API principal decide qual usar.
+
+---
+
+## 📤 Envio de Mensagens
+
+**Endpoint**
+
+```
+POST /instances/:name/message
+```
+
+**Body**
+
+```json
+{
+  "number": "559199999999",
+  "message": "Olá!"
+}
+```
+
+Regras:
+
+- Instância deve estar `CONNECTED` ou `DEGRADED`
+- Socket precisa estar pronto
+- Número é normalizado para `@s.whatsapp.net`
+
+Após envio:
+
+- Evento `message.sent` é enviado via webhook
+
+---
+
+## ✅ ACK de Mensagens (Crítico)
+
+Evento Baileys:
+
+```
+messages.update
+```
+
+Mapeamento:
+
+- `1` → enviada
+- `2` → entregue
+- `3` → lida
+
+Comportamento:
+
+- Status < 2 → `DEGRADED`
+- Status ≥ 2 → `CONNECTED`
+
+---
+
+## 🔎 Consulta de Instâncias
+
+- `GET /instances` → lista resumida
+- `GET /instances/:name` → status da instância
+
+---
+
+## 🗑️ Remoção Segura
+
+- `DELETE /instances/:name`
+- Finaliza socket
+- Remove instância da memória
+- Impede reconexão automática
+
+---
+
+## 🚫 O Que Este Container NÃO Faz
+
+- ❌ Não controla funil
+- ❌ Não interpreta respostas
+- ❌ Não acessa banco de dados
+- ❌ Não mantém estado de conversa
+
+Tudo isso pertence à **API principal (`api_mensagem`)**.
+
+---
+
+## ✅ Status do Documento
+
+✔ README oficial do WhatsApp Instance Manager
+✔ Define contrato claro com a API principal
+✔ Base para desenvolvimento do frontend
+
+---
+
+📌 Próximo passo recomendado:
+
+- README do **Banco de Dados**
+- Mapeamento final de eventos WhatsApp → API
+- Início do frontend (dashboard de instâncias)
