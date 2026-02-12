@@ -86,6 +86,7 @@ class InstanceManager extends EventEmitter {
       name,
       webhook: webhookUrl,
       sock,
+      authPath, // 👈 adiciona aqui
       status: 'INITIALIZING',
       qrCode: null,
       userInfo: null,
@@ -108,7 +109,7 @@ class InstanceManager extends EventEmitter {
     sock.ev.on('creds.update', saveCreds);
 
     /* ===== CONEXÃO ===== */
-    sock.ev.on('connection.update', update => {
+    sock.ev.on('connection.update', async (update) => {
       const { connection, lastDisconnect, qr } = update;
 
       if (qr) {
@@ -122,7 +123,18 @@ class InstanceManager extends EventEmitter {
         instance.userInfo = sock.user;
         instance.qrCode = null;
 
-        // 🔍 Teste de sanidade (mensagem para si mesmo)
+        await sendWebhook(instance.webhook, {
+          event: "instance.connected",
+          provider: "whatsapp",
+          nome: instance.name,
+          session_string: null,
+          phoneNumber: sock.user?.id?.split(":")[0] || null,
+          webhook: instance.webhook,
+          ds_auth_path: instance.authPath,
+          createdAt: new Date().toISOString()
+        });
+
+        // 🔍 Teste de sanidade
         sock.sendMessage(sock.user.id, { text: 'ping' }).catch(() => {
           instance.status = 'INVALID';
         });
@@ -131,6 +143,12 @@ class InstanceManager extends EventEmitter {
       if (connection === 'close') {
         const reason = new Boom(lastDisconnect?.error)?.output?.statusCode;
         instance.status = 'DISCONNECTED';
+
+        await sendWebhook(instance.webhook, {
+          event: "instance.disconnected",
+          provider: "whatsapp",
+          nome: instance.name
+        });
 
         if (reason === DisconnectReason.loggedOut) {
           this.safeRemoveInstance(instance.id);
