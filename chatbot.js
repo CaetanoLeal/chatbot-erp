@@ -16,20 +16,38 @@ function formatNumber(number) {
 }
 
 app.post('/instances/create', async (req, res) => {
-  const { name, webhookUrl } = req.body
+  const { name, webhookUrl, id_funil } = req.body
   const instanceId = uuidv4()
 
-  await instanceManager.createInstance(instanceId, name, webhookUrl)
+  await instanceManager.createInstance(
+    instanceId,
+    name,
+    webhookUrl,
+    id_funil
+  )
 
   res.json({
     status: true,
     instanceId,
-    message: 'Instância criada. Aguarde QR Code.'
+    message: 'QR Code gerado, scaneie para conectar a instância'
   })
 })
 
 app.get('/instances', (req, res) => {
   res.json(instanceManager.listAllInstances())
+})
+
+app.get('/instances/:name/qrcode', (req, res) => {
+  const data = instanceManager.getQrCodeByName(req.params.name)
+
+  if (!data) {
+    return res.status(404).json({ error: 'Instância não encontrada' })
+  }
+
+  return res.json({
+    status: data.status,
+    qrCode: data.qrCode
+  })
 })
 
 app.get('/instances/:name', (req, res) => {

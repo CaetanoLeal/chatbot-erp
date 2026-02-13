@@ -65,7 +65,7 @@ class InstanceManager extends EventEmitter {
   /* =======================
      CRIAÇÃO
   ======================= */
-  async createInstance(instanceId, name, webhookUrl) {
+  async createInstance(instanceId, name, webhookUrl, id_funil) {
     for (const inst of this.instances.values()) {
       if (inst.name === name) {
         throw new Error('Já existe uma instância com esse nome');
@@ -85,8 +85,9 @@ class InstanceManager extends EventEmitter {
       id: instanceId,
       name,
       webhook: webhookUrl,
+      id_funil,
       sock,
-      authPath, // 👈 adiciona aqui
+      authPath,
       status: 'INITIALIZING',
       qrCode: null,
       userInfo: null,
@@ -127,6 +128,7 @@ class InstanceManager extends EventEmitter {
           event: "instance.connected",
           provider: "whatsapp",
           nome: instance.name,
+          id_funil: instance.id_funil,
           session_string: null,
           phoneNumber: sock.user?.id?.split(":")[0] || null,
           webhook: instance.webhook,
@@ -237,6 +239,16 @@ class InstanceManager extends EventEmitter {
       }
     }
     return null;
+  }
+
+  getQrCodeByName(name) {
+    const instance = this.getInstanceByName(name)
+    if (!instance) return null
+
+    return {
+      status: instance.status,
+      qrCode: instance.qrCode
+    }
   }
 
   /* =======================
