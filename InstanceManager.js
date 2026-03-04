@@ -1,14 +1,16 @@
-//InstanceManager.js
-const makeWASocket = require('@whiskeysockets/baileys').default;
+// InstanceManager.js
 const {
+  default: makeWASocket,
+  fetchLatestBaileysVersion,
   useMultiFileAuthState,
   DisconnectReason
 } = require('@whiskeysockets/baileys');
-const qrcode = require('qrcode-terminal');
 const EventEmitter = require('events');
 const path = require('path');
 const { Boom } = require('@hapi/boom');
 const { sendWebhook } = require('./WebhookService');
+const QRCode = require('qrcode');
+const fs = require('fs');
 
 /* =======================
    EXTRAÇÃO DE MENSAGEM
@@ -49,6 +51,11 @@ class InstanceManager extends EventEmitter {
   constructor() {
     super();
     this.instances = new Map();
+    this.io = null;
+  }
+
+  setIO(io) {
+    this.io = io;
   }
 
   /* =======================
@@ -72,12 +79,27 @@ class InstanceManager extends EventEmitter {
       }
     }
 
-    const authPath = path.join(__dirname, 'auth', instanceId);
+    const authRoot = path.join(__dirname, 'auth');
+    const authPath = path.join(authRoot, instanceId);
+
+    // garante pasta auth
+    if (!fs.existsSync(authRoot)) {
+      fs.mkdirSync(authRoot);
+    }
+
+    // 🔥 garante pasta da instância
+    if (!fs.existsSync(authPath)) {
+      fs.mkdirSync(authPath);
+    }
+
     const { state, saveCreds } = await useMultiFileAuthState(authPath);
+    const { version } = await fetchLatestBaileysVersion();
 
     const sock = makeWASocket({
+      version,
       auth: state,
       printQRInTerminal: false,
+      browser: ['Ubuntu', 'Chrome', '22.04'],
       logger: require('pino')({ level: 'silent' })
     });
 
@@ -115,14 +137,35 @@ class InstanceManager extends EventEmitter {
 
       if (qr) {
         instance.status = 'SCAN_QR_CODE';
-        instance.qrCode = qr;
-        qrcode.generate(qr, { small: true });
+
+        const qrImage = await QRCode.toDataURL(qr);
+
+        instance.qrCode = qrImage;
+
+        if (this.io) {
+          this.io.emit("INSTANCE_QR", {
+            nome: instance.name,
+            qrCode: qrImage,
+          });
+        }
+      
+        await sendWebhook(instance.webhook, {
+          event: "instance.qr",
+          nome: instance.name,
+          qrCode: qrImage
+        });
       }
 
       if (connection === 'open') {
         instance.status = 'CONNECTED';
         instance.userInfo = sock.user;
         instance.qrCode = null;
+
+        if (this.io) {
+          this.io.emit("INSTANCE_CONNECTED", {
+            nome: instance.name,
+          });
+        }
 
         await sendWebhook(instance.webhook, {
           event: "instance.connected",
@@ -136,7 +179,6 @@ class InstanceManager extends EventEmitter {
           createdAt: new Date().toISOString()
         });
 
-        // 🔍 Teste de sanidade
         sock.sendMessage(sock.user.id, { text: 'ping' }).catch(() => {
           instance.status = 'INVALID';
         });
@@ -145,6 +187,13 @@ class InstanceManager extends EventEmitter {
       if (connection === 'close') {
         const reason = new Boom(lastDisconnect?.error)?.output?.statusCode;
         instance.status = 'DISCONNECTED';
+        console.log("CONNECTION CLOSED:", reason)
+
+        if (this.io) {
+          this.io.emit("INSTANCE_DISCONNECTED", {
+            nome: instance.name,
+          });
+        }
 
         await sendWebhook(instance.webhook, {
           event: "instance.disconnected",
@@ -154,6 +203,7 @@ class InstanceManager extends EventEmitter {
 
         if (reason === DisconnectReason.loggedOut) {
           this.safeRemoveInstance(instance.id);
+          console.log("🔴 Sessão inválida. Limpando auth...");
         } else {
           setTimeout(() => this.reconnect(instance), 5000);
         }
@@ -162,10 +212,6 @@ class InstanceManager extends EventEmitter {
 
     /* ===== MENSAGENS RECEBIDAS ===== */
     sock.ev.on('messages.upsert', async ({ messages, type }) => {
-       console.log(
-        '[MENSAGEM CRUA]',
-        JSON.stringify({ messages, type }, null, 2)
-      );
       if (type !== 'notify') return;
 
       const msg = messages[0];
@@ -183,7 +229,6 @@ class InstanceManager extends EventEmitter {
         },
         whatsapp: {
           jid: msg.key.remoteJid,
-          jidAlt: msg.key.remoteJidAlt,
           messageId: msg.key.id,
           pushName: msg.pushName || null,
           timestamp: msg.messageTimestamp
@@ -198,20 +243,13 @@ class InstanceManager extends EventEmitter {
       await sendWebhook(instance.webhook, payload);
     });
 
-    /* ===== ACK DE ENVIO (CRÍTICO) ===== */
+    /* ===== ACK DE ENVIO ===== */
     sock.ev.on('messages.update', updates => {
       for (const update of updates) {
         if (!update.key.fromMe) continue;
 
         const status = update.update?.status;
         instance._lastAck = status;
-
-        /*
-          status:
-          1 = enviado
-          2 = entregue
-          3 = lido
-        */
 
         if (status < 2) {
           instance.status = 'DEGRADED';
@@ -242,17 +280,17 @@ class InstanceManager extends EventEmitter {
   }
 
   getQrCodeByName(name) {
-    const instance = this.getInstanceByName(name)
-    if (!instance) return null
+    const instance = this.getInstanceByName(name);
+    if (!instance) return null;
 
     return {
       status: instance.status,
       qrCode: instance.qrCode
-    }
+    };
   }
 
   /* =======================
-     ENVIO SEGURO
+     ENVIO
   ======================= */
   async sendMessageByName(name, jid, content) {
     const instance = this.getInstanceByName(name);
@@ -269,7 +307,7 @@ class InstanceManager extends EventEmitter {
 
     const sentMsg = await instance.sock.sendMessage(jid, content);
 
-    const payload = {
+    await sendWebhook(instance.webhook, {
       event: 'message.sent',
       instance: {
         id: instance.id,
@@ -284,19 +322,15 @@ class InstanceManager extends EventEmitter {
         type: Object.keys(content)[0],
         text: content.text || null
       }
-    };
+    });
 
-    await sendWebhook(instance.webhook, payload);
     return sentMsg;
   }
 
   async sendTextMessageByName(name, number, text) {
-  const jid = number.replace(/\D/g, '') + '@s.whatsapp.net'
-
-  return this.sendMessageByName(name, jid, {
-    text
-  })
-}
+    const jid = number.replace(/\D/g, '') + '@s.whatsapp.net';
+    return this.sendMessageByName(name, jid, { text });
+  }
 
   /* =======================
      REMOÇÃO
@@ -316,9 +350,15 @@ class InstanceManager extends EventEmitter {
     if (!instance) return;
 
     instance._destroying = true;
+
     try {
       instance.sock.end();
     } catch (_) {}
+
+    // 🔥 remover pasta auth física
+    if (instance.authPath && fs.existsSync(instance.authPath)) {
+      fs.rmSync(instance.authPath, { recursive: true, force: true });
+    }
 
     this.instances.delete(id);
   }
@@ -326,7 +366,12 @@ class InstanceManager extends EventEmitter {
   async reconnect(instance) {
     if (instance._destroying) return;
     await this.safeRemoveInstance(instance.id);
-    await this.createInstance(instance.id, instance.name, instance.webhook);
+    await this.createInstance(
+      instance.id,
+      instance.name,
+      instance.webhook,
+      instance.id_funil
+    );
   }
 }
 

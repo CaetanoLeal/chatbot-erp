@@ -120,6 +120,20 @@ app.delete('/instances/:name', async (req, res) => {
   res.json({ status: true })
 })
 
-app.listen(PORT, () =>
-  console.log(`🚀 API rodando na porta ${PORT}`)
-)
+const http = require("http");
+const { Server } = require("socket.io");
+
+const server = http.createServer(app);
+
+const io = new Server(server, {
+  cors: {
+    origin: "*",
+  },
+});
+
+app.set("io", io);
+instanceManager.setIO(io);
+
+server.listen(PORT, () =>
+  console.log(`🚀 Chatbot ERP rodando na porta ${PORT}`)
+);
