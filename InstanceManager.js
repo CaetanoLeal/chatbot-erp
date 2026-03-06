@@ -179,7 +179,7 @@ class InstanceManager extends EventEmitter {
           createdAt: new Date().toISOString()
         });
 
-        sock.sendMessage(sock.user.id, { text: 'ping' }).catch(() => {
+        (() => {
           instance.status = 'INVALID';
         });
       }
@@ -202,7 +202,7 @@ class InstanceManager extends EventEmitter {
         });
 
         if (reason === DisconnectReason.loggedOut) {
-          this.safeRemoveInstance(instance.id);
+          await this.safeRemoveInstance(instance.id, true);
           console.log("🔴 Sessão inválida. Limpando auth...");
         } else {
           setTimeout(() => this.reconnect(instance), 5000);
@@ -214,33 +214,36 @@ class InstanceManager extends EventEmitter {
     sock.ev.on('messages.upsert', async ({ messages, type }) => {
       if (type !== 'notify') return;
 
-      const msg = messages[0];
-      if (!msg || msg.key.fromMe) return;
-      if (msg.message?.protocolMessage) return;
+      for (const msg of messages) {
+        if (!msg || msg.key.fromMe) continue;
+        if (msg.message?.protocolMessage) continue;
 
-      const data = extractMessage(msg);
-      if (!data.text || data.text === '[Tipo não tratado]') return;
+        const data = extractMessage(msg);
+        if (!data.text || data.text === '[Tipo não tratado]') continue;
 
-      const payload = {
-        event: 'message.received',
-        instance: {
-          id: instance.id,
-          name: instance.name
-        },
-        whatsapp: {
-          jid: msg.key.remoteJid,
-          messageId: msg.key.id,
-          pushName: msg.pushName || null,
-          timestamp: msg.messageTimestamp
-        },
-        message: {
-          type: data.type,
-          text: data.text,
-          raw: msg.message
-        }
-      };
+        const payload = {
+          event: 'message.received',
+          nome: instance.name,
+          instance: {
+            id: instance.id,
+            name: instance.name
+          },
+          whatsapp: {
+            jid: msg.key.remoteJid,
+            jidAlt: msg.key.participant || null,
+            messageId: msg.key.id,
+            pushName: msg.pushName || null,
+            timestamp: msg.messageTimestamp
+          },
+          message: {
+            type: data.type,
+            text: data.text,
+            raw: msg.message
+          }
+        };
 
-      await sendWebhook(instance.webhook, payload);
+        await sendWebhook(instance.webhook, payload);
+      }
     });
 
     /* ===== ACK DE ENVIO ===== */
@@ -345,7 +348,7 @@ class InstanceManager extends EventEmitter {
     return false;
   }
 
-  async safeRemoveInstance(id) {
+  async safeRemoveInstance(id, removeAuth = false) {
     const instance = this.instances.get(id);
     if (!instance) return;
 
@@ -355,8 +358,7 @@ class InstanceManager extends EventEmitter {
       instance.sock.end();
     } catch (_) {}
 
-    // 🔥 remover pasta auth física
-    if (instance.authPath && fs.existsSync(instance.authPath)) {
+    if (removeAuth && instance.authPath && fs.existsSync(instance.authPath)) {
       fs.rmSync(instance.authPath, { recursive: true, force: true });
     }
 
@@ -365,7 +367,9 @@ class InstanceManager extends EventEmitter {
 
   async reconnect(instance) {
     if (instance._destroying) return;
-    await this.safeRemoveInstance(instance.id);
+
+    await this.safeRemoveInstance(instance.id, false); // NÃO remove auth
+
     await this.createInstance(
       instance.id,
       instance.name,
