@@ -45,6 +45,44 @@ function extractMessage(msg) {
 }
 
 /* =======================
+   Foto e último visto com cache simples
+======================= */
+const profileCache = new Map()
+
+async function getContactInfo(sock, jid) {
+
+  const cache = profileCache.get(jid)
+
+  if (cache && Date.now() - cache.timestamp < 600000) {
+    return cache.data
+  }
+
+  let photo = null
+  let lastSeen = null
+
+  try {
+    photo = await sock.profilePictureUrl(jid, 'image')
+  } catch (_) {}
+
+  try {
+    const status = await sock.fetchStatus(jid)
+    lastSeen = status?.setAt || null
+  } catch (_) {}
+
+  const data = {
+    photo,
+    lastSeen
+  }
+
+  profileCache.set(jid, {
+    timestamp: Date.now(),
+    data
+  })
+
+  return data
+}
+
+/* =======================
    INSTANCE MANAGER
 ======================= */
 class InstanceManager extends EventEmitter {
@@ -87,7 +125,7 @@ class InstanceManager extends EventEmitter {
       fs.mkdirSync(authRoot);
     }
 
-    // 🔥 garante pasta da instância
+    // garante pasta da instância
     if (!fs.existsSync(authPath)) {
       fs.mkdirSync(authPath);
     }
@@ -212,17 +250,23 @@ class InstanceManager extends EventEmitter {
 
     /* ===== MENSAGENS RECEBIDAS ===== */
     sock.ev.on('messages.upsert', async ({ messages, type }) => {
+
       if (type !== 'notify') return;
 
       for (const msg of messages) {
-        if (!msg || msg.key.fromMe) continue;
-        if (msg.message?.protocolMessage) continue;
 
-        const data = extractMessage(msg);
-        if (!data.text || data.text === '[Tipo não tratado]') continue;
+        if (!msg) continue
+        if (msg.message?.protocolMessage) continue
 
-        const payload = {
-          event: 'message.received',
+        const data = extractMessage(msg)
+
+        if (!data.text || data.text === '[Tipo não tratado]') continue
+
+        const jid = msg.key.remoteJid
+
+        const contactInfo = await getContactInfo(sock, jid)
+
+        const basePayload = {
           nome: instance.name,
           instance: {
             id: instance.id,
@@ -233,17 +277,39 @@ class InstanceManager extends EventEmitter {
             jidAlt: msg.key.participant || null,
             messageId: msg.key.id,
             pushName: msg.pushName || null,
-            timestamp: msg.messageTimestamp
+            timestamp: msg.messageTimestamp,
+            profilePicture: contactInfo.photo,
+            lastSeen: contactInfo.lastSeen
           },
           message: {
             type: data.type,
             text: data.text,
             raw: msg.message
           }
-        };
+        }
 
-        await sendWebhook(instance.webhook, payload);
+        /* ===== RECEBIDA ===== */
+        if (!msg.key.fromMe) {
+
+          await sendWebhook(instance.webhook, {
+            event: 'message.received',
+            ...basePayload
+          })
+
+        }
+
+        /* ===== ENVIADA ===== */
+        if (msg.key.fromMe) {
+
+          await sendWebhook(instance.webhook, {
+            event: 'message.sent',
+            ...basePayload
+          })
+
+        }
+
       }
+
     });
 
     /* ===== ACK DE ENVIO ===== */
