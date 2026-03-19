@@ -258,13 +258,36 @@ class InstanceManager extends EventEmitter {
         if (!msg) continue
         if (msg.message?.protocolMessage) continue
 
+        // ===== BAILEYS DEBUG LOGS =====
+        console.log("\n========== DEBUG BAILEYS ==========")
+
+        console.log("remoteJid:", msg.key?.remoteJid)
+        console.log("participant:", msg.key?.participant)
+        console.log("fromMe:", msg.key?.fromMe)
+        console.log("id:", msg.key?.id)
+
+        console.log("pushName:", msg.pushName)
+        console.log("timestamp:", msg.messageTimestamp)
+
+        console.log("message keys:", Object.keys(msg.message || {}))
+
+        console.log("FULL RAW:")
+        console.dir(msg, { depth: null })
+
+        console.log("==================================\n")
+        // ===== END DEBUG =====
+
         const data = extractMessage(msg)
 
         if (!data.text || data.text === '[Tipo não tratado]') continue
 
-        const jid = msg.key.remoteJid
+        const senderJid =
+          msg.key.participantAlt ||
+          msg.key.participant ||
+          msg.key.remoteJidAlt ||
+          msg.key.remoteJid
 
-        const contactInfo = await getContactInfo(sock, jid)
+        const contactInfo = await getContactInfo(sock, senderJid)
 
         const basePayload = {
           nome: instance.name,
@@ -274,7 +297,7 @@ class InstanceManager extends EventEmitter {
           },
           whatsapp: {
             jid: msg.key.remoteJid,
-            jidAlt: msg.key.participant || null,
+            jidAlt: msg.key.remoteJidAlt || null,
             messageId: msg.key.id,
             pushName: msg.pushName || null,
             timestamp: msg.messageTimestamp,
