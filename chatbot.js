@@ -120,32 +120,6 @@ await sendWebhook(instance.webhook, payload)
   }
 })
 
-/* app.post('/instances/:name/message', async (req, res) => {
-  try {
-    const { number, message } = req.body
-    const { name } = req.params
-
-    if (!number || !message) {
-      return res.status(400).json({
-        error: 'number e message são obrigatórios'
-      })
-    }
-
-    const sent = await instanceManager.sendTextMessageByName(
-      name,
-      number,
-      message
-    )
-
-    return res.json({
-      status: true,
-      messageId: sent.key.id
-    })
-  } catch (err) {
-    console.error('❌ Erro ao enviar mensagem:', err.message)
-    return res.status(500).json({ error: err.message })
-  }
-}) */
 
 app.delete('/instances/:name', async (req, res) => {
   await instanceManager.safeRemoveInstanceByName(req.params.name)
