@@ -1,4 +1,6 @@
 // InstanceManager.js
+require('dotenv').config()
+
 const {
   default: makeWASocket,
   fetchLatestBaileysVersion,
@@ -117,7 +119,7 @@ class InstanceManager extends EventEmitter {
       }
     }
 
-    const authRoot = path.join(__dirname, 'auth');
+    const authRoot = path.join(__dirname, process.env.AUTH_FOLDER);
     const authPath = path.join(authRoot, instanceId);
 
     // garante pasta auth
@@ -137,8 +139,12 @@ class InstanceManager extends EventEmitter {
       version,
       auth: state,
       printQRInTerminal: false,
-      browser: ['Ubuntu', 'Chrome', '22.04'],
-      logger: require('pino')({ level: 'silent' })
+      browser: [
+        process.env.WHATSAPP_BROWSER_NAME,
+        process.env.WHATSAPP_BROWSER_VERSION,
+        process.env.WHATSAPP_BROWSER_OS_VERSION
+      ],
+      logger: require('pino')({ level: process.env.LOG_LEVEL })
     });
 
     const instance = {

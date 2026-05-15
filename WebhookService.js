@@ -1,5 +1,8 @@
 // WebhookService.js
+require('dotenv').config()
 const axios = require('axios');
+
+const WEBHOOK_TIMEOUT = Number(process.env.WEBHOOK_TIMEOUT) || 15000
 
 /**
  * Envia um payload para a URL de webhook especificada.
@@ -14,7 +17,7 @@ async function sendWebhook(url, payload) {
 
   try {
     const response = await axios.post(url, payload, {
-      timeout: 15000, // Timeout de 15 segundos
+      timeout: WEBHOOK_TIMEOUT,
       headers: {
         'Content-Type': 'application/json',
         'Accept': 'application/json'

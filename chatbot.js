@@ -1,4 +1,6 @@
 // chatbot.js
+require('dotenv').config()
+
 const express = require('express')
 const cors = require('cors')
 const { body, validationResult } = require('express-validator')
@@ -7,7 +9,7 @@ const instanceManager = require('./InstanceManager')
 const { sendWebhook } = require('./WebhookService')
 
 const app = express()
-const PORT = 3000
+const PORT = process.env.PORT ? Number(process.env.PORT) : null
 
 app.use(cors())
 app.use(express.json())
@@ -133,7 +135,7 @@ const server = http.createServer(app);
 
 const io = new Server(server, {
   cors: {
-    origin: "*",
+    origin: process.env.SOCKET_IO_CORS_ORIGIN,
   },
 });
 
