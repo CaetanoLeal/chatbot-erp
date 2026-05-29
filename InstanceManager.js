@@ -195,7 +195,12 @@ class InstanceManager extends EventEmitter {
       
         await sendWebhook(instance.webhook, {
           event: "instance.qr",
-          nome: instance.name,
+
+          instance: {
+            id: instance.id,
+            name: instance.name
+          },
+
           qrCode: qrImage
         });
       }
@@ -211,20 +216,31 @@ class InstanceManager extends EventEmitter {
           });
         }
 
+        let profilePicture = null
+
+        try {
+          profilePicture = await sock.profilePictureUrl(
+            sock.user.id,
+            'image'
+          )
+        } catch (_) {}
+
         await sendWebhook(instance.webhook, {
           event: "instance.connected",
           provider: "whatsapp",
-          nome: instance.name,
+
+          instance: {
+            id: instance.id,
+            name: instance.name
+          },
+
           id_funil: instance.id_funil,
           session_string: null,
           phoneNumber: sock.user?.id?.split(":")[0] || null,
+          profilePicture,
           webhook: instance.webhook,
           ds_auth_path: instance.authPath,
           createdAt: new Date().toISOString()
-        });
-
-        (() => {
-          instance.status = 'INVALID';
         });
       }
 
@@ -242,7 +258,11 @@ class InstanceManager extends EventEmitter {
         await sendWebhook(instance.webhook, {
           event: "instance.disconnected",
           provider: "whatsapp",
-          nome: instance.name
+
+          instance: {
+            id: instance.id,
+            name: instance.name
+          }
         });
 
         if (reason === DisconnectReason.loggedOut) {
