@@ -5,7 +5,8 @@ const {
   default: makeWASocket,
   fetchLatestBaileysVersion,
   useMultiFileAuthState,
-  DisconnectReason
+  DisconnectReason,
+  downloadMediaMessage
 } = require('@whiskeysockets/baileys');
 const EventEmitter = require('events');
 const path = require('path');
@@ -13,6 +14,9 @@ const { Boom } = require('@hapi/boom');
 const { sendWebhook } = require('./WebhookService');
 const QRCode = require('qrcode');
 const fs = require('fs');
+const os = require("os");
+
+const { transcreverAudio } = require("./helpers/transcribe.helper");
 
 /* =======================
    EXTRAÇÃO DE MENSAGEM
@@ -276,7 +280,6 @@ class InstanceManager extends EventEmitter {
 
     /* ===== MENSAGENS RECEBIDAS ===== */
     sock.ev.on('messages.upsert', async ({ messages, type }) => {
-
       if (type !== 'notify') return;
 
       for (const msg of messages) {
@@ -303,7 +306,53 @@ class InstanceManager extends EventEmitter {
         console.log("==================================\n")
         // ===== END DEBUG =====
 
-        const data = extractMessage(msg)
+        const data = await extractMessage(msg, sock);
+
+        if (data.type === "audio") {
+
+          try {
+
+              console.log("🎤 Baixando áudio...");
+
+              const buffer = await downloadMediaMessage(
+                  msg,
+                  "buffer",
+                  {},
+                  {
+                      logger: sock.logger,
+                      reuploadRequest: sock.updateMediaMessage
+                  }
+              );
+
+              const arquivo = path.join(
+                  os.tmpdir(),
+                  `${msg.key.id}.ogg`
+              );
+
+              fs.writeFileSync(arquivo, buffer);
+
+              console.log("🎤 Transcrevendo...");
+
+              const texto = await transcreverAudio(arquivo);
+
+              fs.unlinkSync(arquivo);
+
+              data.text = texto;
+
+              console.log("====================================");
+              console.log("🎤 TRANSCRIÇÃO");
+              console.log(texto);
+              console.log("====================================");
+
+          } catch (err) {
+
+              console.error("Erro ao transcrever:", err);
+
+              data.text = "[Áudio]";
+
+          }
+
+      }
 
         if (!data.text || data.text === '[Tipo não tratado]') continue
 
