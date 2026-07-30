@@ -4,7 +4,7 @@ const OpenAI = require("openai");
 const fs = require("fs");
 
 const client = new OpenAI({
-    apiKey: process.env.OPENAI_API_KEY
+    apiKey: process.env.GPT_4O_MINI_TRANSCRIBLE_KEY
 });
 
 async function transcreverAudio(path){
